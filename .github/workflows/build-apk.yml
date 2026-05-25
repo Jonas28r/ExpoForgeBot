@@ -16,7 +16,7 @@ jobs:
       - name: Configurar Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20 # ACTUALIZADO: Version 20 para cumplir con el requisito
+          node-version: 18
 
       - name: Configurar Java JDK
         uses: actions/setup-java@v4
@@ -36,11 +36,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-expo-
 
-      # INSTALACIÓN ROBUSTA: Forzamos npm install para asegurar que expo y librerías estén listos
-      - name: Instalar Dependencias
-        run: npm install
+      # Instalación compatible con versiones de Expo Snack
+      - name: Instalar dependencias del proyecto
+        run: npm ci --legacy-peer-deps || npm install --legacy-peer-deps
 
-      # GUARDA EL ARCHIVO ACTUALIZADO: Sube el package-lock.json nuevo a tu GitHub de forma automática
+      # SOLUCIÓN AL ERROR: Forzar la instalación de Expo y Expo CLI en el servidor
+      - name: Instalar y Verificar Módulo de Expo
+        run: |
+          npm install expo --legacy-peer-deps
+          npm install -g expo-cli
+
+      # GUARDA EL ARCHIVO ACTUALIZADO: Sube el archivo modificado ignorando ganchos de pre-commit
       - name: Guardar package-lock.json actualizado en el repositorio
         run: |
           git config --global user.name "GitHub Action Bot"
