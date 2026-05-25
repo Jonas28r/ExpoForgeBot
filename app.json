@@ -1,17 +1,23 @@
 {
   "expo": {
-    "name": "authentic-indigo-pudding",
-    "slug": "snack-314b6986-fd05-4381-a350-82ac3a4fea82",
+    "name": "Mi Boveda",
+    "slug": "mi-boveda",
     "version": "1.0.0",
-    "orientation": "portrait",
-    "userInterfaceStyle": "light",
-    "newArchEnabled": true,
-    "ios": {
-      "supportsTablet": true
-    },
-    "android": {
-      "package": "com.anonymous.authenticindigopudding",
-      "edgeToEdgeEnabled": true
-    }
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "La app necesita acceso a la galería para seleccionar los archivos a encriptar."
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "La app necesita acceso para ocultar fotos.",
+          "savePhotosPermission": "La app necesita guardar los archivos ocultos en su directorio."
+        }
+      ],
+      "expo-screen-capture"
+    ]
   }
 }
