@@ -16,7 +16,7 @@ jobs:
       - name: Configurar Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20 # ACTUALIZADO: Version 20 para cumplir con el requisito
 
       - name: Configurar Java JDK
         uses: actions/setup-java@v4
@@ -36,11 +36,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-expo-
 
-      # TRUCO: Actualiza o crea el package-lock.json automáticamente según tu package.json
-      - name: Instalar y Actualizar Candado de Dependencias
-        run: npm install --package-lock-only || npm install
+      # INSTALACIÓN ROBUSTA: Forzamos npm install para asegurar que expo y librerías estén listos
+      - name: Instalar Dependencias
+        run: npm install
 
-      # GUARDA EL ARCHIVO ACTUALIZADO: Sube el archivo modificado ignorando ganchos de pre-commit
+      # GUARDA EL ARCHIVO ACTUALIZADO: Sube el package-lock.json nuevo a tu GitHub de forma automática
       - name: Guardar package-lock.json actualizado en el repositorio
         run: |
           git config --global user.name "GitHub Action Bot"
@@ -67,4 +67,3 @@ jobs:
           name: Mi-App-Expo-APK
           path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 1
-
