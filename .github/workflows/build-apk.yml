@@ -1,0 +1,70 @@
+name: Compilar APK de Expo Gratis Optimizado
+
+on:
+  workflow_dispatch: # Permite activar la compilación manualmente desde tu teléfono
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clonar repositorio
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }} # Da permiso para guardar el archivo nuevo
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Configurar Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # Configuración de caché para acelerar futuras compilaciones
+      - name: Configurar Caché de Dependencias
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            **/node_modules
+          key: ${{ runner.os }}-expo-${{ hashFiles('**/package-lock.json', '**/build.gradle') }}
+          restore-keys: |
+            ${{ runner.os }}-expo-
+
+      # TRUCO: Actualiza o crea el package-lock.json automáticamente según tu package.json
+      - name: Instalar y Actualizar Candado de Dependencias
+        run: npm install --package-lock-only || npm install
+
+      # GUARDA EL ARCHIVO ACTUALIZADO: Sube el archivo modificado ignorando ganchos de pre-commit
+      - name: Guardar package-lock.json actualizado en el repositorio
+        run: |
+          git config --global user.name "GitHub Action Bot"
+          git config --global user.email "actions@github.com"
+          git add package-lock.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update package-lock.json [skip ci]" --no-verify && git push)
+
+      - name: Generar carpeta nativa de Android (Prebuild)
+        run: npx expo prebuild --platform android
+
+      - name: Dar permisos a Gradle
+        run: chmod +x android/gradlew
+
+      # Compilación protegida contra errores de falta de memoria RAM (Límite 4GB)
+      - name: Compilar APK (Modo Debug)
+        run: |
+          cd android
+          ./gradlew assembleDebug -Dorg.gradle.jvmargs="-Xmx4096m -XX:MaxMetaspaceSize=512m"
+
+      # Guarda el APK y lo elimina automáticamente en 24 horas para no llenar tu cuenta
+      - name: Guardar APK Final (Auto-limpieza en 24h)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mi-App-Expo-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 1
+
