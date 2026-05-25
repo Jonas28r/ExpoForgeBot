@@ -14,12 +14,12 @@
     "react-native": "0.81.5",
     "@expo/vector-icons": "^15.0.3",
     "react-native-paper": "4.9.2",
-    "@react-native-async-storage/async-storage": "*",
-    "expo-sensors": "*",
-    "expo-screen-capture": "*",
-    "expo-file-system": "*",
-    "expo-image-picker": "*",
-    "expo-media-library": "*"
+    "@react-native-async-storage/async-storage": "latest",
+    "expo-sensors": "latest",
+    "expo-screen-capture": "latest",
+    "expo-file-system": "latest",
+    "expo-image-picker": "latest",
+    "expo-media-library": "latest"
   },
   "private": true
 }
