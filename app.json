@@ -16,8 +16,7 @@
           "photosPermission": "La app necesita acceso para ocultar fotos.",
           "savePhotosPermission": "La app necesita guardar los archivos ocultos en su directorio."
         }
-      ],
-      "expo-screen-capture"
+      ]
     ]
   }
 }
