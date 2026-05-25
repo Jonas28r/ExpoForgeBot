@@ -13,10 +13,10 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }} # Da permiso para guardar el archivo nuevo
 
-      - name: Configurar Node.js
+      - name: Configurar Node.js (Actualizado para SDK 54)
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20 # Expo SDK 54 y React Native 0.81 exigen Node 20.
 
       - name: Configurar Java JDK
         uses: actions/setup-java@v4
@@ -36,27 +36,23 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-expo-
 
-      # Instalación compatible con versiones de Expo Snack
-      - name: Instalar dependencias del proyecto
-        run: npm ci --legacy-peer-deps || npm install --legacy-peer-deps
-
-      # Forzar la instalación de Expo y Expo CLI en el servidor
-      - name: Instalar y Verificar Módulo de Expo
+      # Instalación inteligente y resolución de los asteriscos (*)
+      - name: Instalar y corregir dependencias (Expo Fix)
         run: |
-          npm install expo --legacy-peer-deps
-          npm install -g expo-cli
+          npm install --legacy-peer-deps
+          npx expo install --fix
 
-      # SOLUCIÓN AL ERROR: Paso blindado. Si no hay cambios o detecta otros archivos modificados, continúa igual.
-      - name: Guardar package-lock.json actualizado en el repositorio
+      # SOLUCIÓN: Guardamos no solo el lock, sino también el package.json limpio
+      - name: Guardar package.json actualizado en el repositorio
         run: |
           git config --global user.name "GitHub Action Bot"
           git config --global user.email "actions@github.com"
-          git add package-lock.json
-          (git commit -m "Auto-update package-lock.json [skip ci]" --no-verify && git push) || echo "No hay cambios pendientes por guardar o Git está limpio. Continuando..."
+          git add package.json package-lock.json
+          (git commit -m "Auto-update dependencias [skip ci]" --no-verify && git push) || echo "No hay cambios pendientes por guardar o Git está limpio. Continuando..."
 
-      # Como ya limpiamos el app.json, este paso correrá perfecto
+      # SOLUCIÓN CRÍTICA: La bandera --clean asegura que los plugins nativos se inyecten bien
       - name: Generar carpeta nativa de Android (Prebuild)
-        run: npx expo prebuild --platform android
+        run: npx expo prebuild --platform android --clean
 
       - name: Dar permisos a Gradle
         run: chmod +x android/gradlew
