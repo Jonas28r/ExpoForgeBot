@@ -8,18 +8,18 @@
     "web": "expo start --web"
   },
   "dependencies": {
+    "@expo/vector-icons": "^15.0.3",
+    "@react-native-async-storage/async-storage": "2.2.0",
     "expo": "~54.0.34",
+    "expo-file-system": "~19.0.22",
+    "expo-image-picker": "~17.0.11",
+    "expo-media-library": "~18.2.1",
+    "expo-screen-capture": "~8.0.9",
+    "expo-sensors": "~15.0.8",
     "expo-status-bar": "~3.0.9",
     "react": "19.1.0",
     "react-native": "0.81.5",
-    "@expo/vector-icons": "^15.0.3",
-    "react-native-paper": "4.9.2",
-    "@react-native-async-storage/async-storage": "latest",
-    "expo-sensors": "latest",
-    "expo-screen-capture": "latest",
-    "expo-file-system": "latest",
-    "expo-image-picker": "latest",
-    "expo-media-library": "latest"
+    "react-native-paper": "4.9.2"
   },
   "private": true
 }
