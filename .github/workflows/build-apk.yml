@@ -57,16 +57,16 @@ jobs:
       - name: Dar permisos a Gradle
         run: chmod +x android/gradlew
 
-      # Compilación protegida contra errores de falta de memoria RAM (Límite 4GB)
-      - name: Compilar APK (Modo Debug)
+      # Compilación en MODO PRODUCCIÓN (Release) para empaquetar el código dentro del APK
+      - name: Compilar APK (Modo Producción)
         run: |
           cd android
-          ./gradlew assembleDebug -Dorg.gradle.jvmargs="-Xmx4096m -XX:MaxMetaspaceSize=512m"
+          ./gradlew assembleRelease -Dorg.gradle.jvmargs="-Xmx4096m -XX:MaxMetaspaceSize=512m"
 
       # Guarda el APK y lo elimina automáticamente en 24 horas para no llenar tu cuenta
       - name: Guardar APK Final (Auto-limpieza en 24h)
         uses: actions/upload-artifact@v4
         with:
-          name: Mi-App-Expo-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: Mi-App-Expo-APK-Release
+          path: android/app/build/outputs/apk/release/*.apk
           retention-days: 1
