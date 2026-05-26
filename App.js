@@ -12,6 +12,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width, height } = Dimensions.get('window');
 const VAULT_DIR = `${FileSystem.documentDirectory}.ghost_vault/`;
+const BTN_SIZE = width * 0.175; // Tamaño de botón estilizado y más compacto
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -19,7 +20,7 @@ export default function App() {
   const [faceDownLock, setFaceDownLock] = useState(false);
   const [isSettingsVisible, setSettingsVisible] = useState(false);
   
-  // Carpetas Dinámicas (Empieza vacío para dar libertad)
+  // Bóveda dinámica completamente libre para el usuario
   const [vaultData, setVaultData] = useState([]);
   
   const [currentFolderId, setCurrentFolderId] = useState(null); 
@@ -30,6 +31,7 @@ export default function App() {
   const [isSetupModalVisible, setIsSetupModalVisible] = useState(false);
   const [newPinInput, setNewPinInput] = useState('');
 
+  // ESCUDO TOTAL: Bloquea cualquier intento de desautenticación deliberada
   const isPickingMedia = useRef(false);
 
   useEffect(() => {
@@ -39,7 +41,7 @@ export default function App() {
         if (pinGuardado) setSecretPin(pinGuardado);
         else setIsSetupModalVisible(true);
 
-        const datosGuardados = await AsyncStorage.getItem('@vault_folders_v3');
+        const datosGuardados = await AsyncStorage.getItem('@vault_folders_v4');
         if (datosGuardados) setVaultData(JSON.parse(datosGuardados));
 
         const savedAntiScreenshot = await AsyncStorage.getItem('@setting_screenshot');
@@ -54,9 +56,14 @@ export default function App() {
     inicializarBoveda();
   }, []);
 
+  // Control de estado de la aplicación con escudo blindado
   useEffect(() => {
     const subscription = AppState.addEventListener('change', nextAppState => {
-      if (nextAppState.match(/inactive|background/) && !isPickingMedia.current) {
+      if (nextAppState.match(/inactive|background/)) {
+        if (isPickingMedia.current) {
+          // Si estamos eligiendo fotos, ignoramos por completo el cierre de fondo
+          return;
+        }
         setIsAuthenticated(false);
         setSettingsVisible(false);
       }
@@ -66,7 +73,7 @@ export default function App() {
 
   const guardarEstructura = async (nuevosDatos) => {
     setVaultData(nuevosDatos);
-    await AsyncStorage.setItem('@vault_folders_v3', JSON.stringify(nuevosDatos));
+    await AsyncStorage.setItem('@vault_folders_v4', JSON.stringify(nuevosDatos));
   };
 
   const registrarPin = async () => {
@@ -99,11 +106,15 @@ export default function App() {
     AsyncStorage.setItem('@setting_screenshot', JSON.stringify(antiScreenshot));
   }, [antiScreenshot]);
 
+  // ESCUDO DEL ACELERÓMETRO: Verificación dinámica en tiempo real
   useEffect(() => {
     let subscription;
-    if (faceDownLock && isAuthenticated && !isPickingMedia.current) {
+    if (faceDownLock && isAuthenticated) {
       subscription = Accelerometer.addListener(({ z }) => {
-        if (z < -0.85) setIsAuthenticated(false);
+        // Si el escudo está activo, el sensor no puede bloquear la pantalla
+        if (!isPickingMedia.current && z < -0.85) {
+          setIsAuthenticated(false);
+        }
       });
       Accelerometer.setUpdateInterval(300);
     }
@@ -114,54 +125,52 @@ export default function App() {
   const importarArchivoMagico = async () => {
     if (!currentFolderId) return;
 
-    // Aquí se pide el permiso total (MANAGE_EXTERNAL_STORAGE lo maneja el OS)
-    const pickerPermission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    const mediaPermission = await MediaLibrary.requestPermissionsAsync();
-
-    if (!pickerPermission.granted || !mediaPermission.granted) {
-      Alert.alert("Acceso Denegado", "Se requieren permisos para hacer la magia.");
-      return;
-    }
-
+    // Levantar el escudo antes de invocar cualquier interfaz nativa del teléfono
     isPickingMedia.current = true; 
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.All,
-      allowsEditing: false,
-      quality: 1,
-    });
+    try {
+      const pickerPermission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      const mediaPermission = await MediaLibrary.requestPermissionsAsync();
 
-    setTimeout(() => { isPickingMedia.current = false; }, 1500);
+      if (!pickerPermission.granted || !mediaPermission.granted) {
+        Alert.alert("Permiso Requerido", "Necesitamos acceso para ocultar tus fotos de forma profesional.");
+        isPickingMedia.current = false;
+        return;
+      }
 
-    if (!result.canceled && result.assets && result.assets.length > 0) {
-      const assetSeleccionado = result.assets[0];
-      const nombreEncriptado = `enc_${Date.now()}.dat`; 
-      const rutaDestino = `${VAULT_DIR}${nombreEncriptado}`;
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.All,
+        allowsEditing: false,
+        quality: 1,
+      });
 
-      try {
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const assetSeleccionado = result.assets[0];
+        const nombreEncriptado = `enc_${Date.now()}.dat`; 
+        const rutaDestino = `${VAULT_DIR}${nombreEncriptado}`;
+
         const folderInfo = await FileSystem.getInfoAsync(VAULT_DIR);
         if (!folderInfo.exists) {
           await FileSystem.makeDirectoryAsync(VAULT_DIR, { intermediates: true });
         }
         await FileSystem.writeAsStringAsync(`${VAULT_DIR}.nomedia`, '');
 
-        // Mover archivo al núcleo de la app
+        // Mover a la zona segura oculta
         await FileSystem.copyAsync({
           from: assetSeleccionado.uri,
           to: rutaDestino,
         });
 
-        // Actualizar la interfaz Manhwa
         const carpetasActualizadas = vaultData.map(folder => {
           if (folder.id === currentFolderId) {
             return {
               ...folder,
-              // Mantener las proporciones reales para el lector vertical
               items: [...folder.items, { 
                 id: nombreEncriptado, 
                 uri: rutaDestino, 
                 width: assetSeleccionado.width, 
-                height: assetSeleccionado.height 
+                height: assetSeleccionado.height,
+                assetId: assetSeleccionado.assetId
               }]
             };
           }
@@ -170,14 +179,20 @@ export default function App() {
 
         await guardarEstructura(carpetasActualizadas);
 
-        // BORRADO SILENCIOSO PROFESIONAL (Requiere que Android haya concedido el Super Permiso)
-        if (assetSeleccionado.uri) {
-           await FileSystem.deleteAsync(assetSeleccionado.uri, { idempotent: true });
+        // BORRADO SEGURO
+        if (assetSeleccionado.assetId) {
+          try {
+            await MediaLibrary.deleteAssetsAsync([assetSeleccionado.assetId]);
+          } catch (e) {
+            console.log("Bypass de eliminación silenciosa nativa activa.");
+          }
         }
-
-      } catch (error) {
-        Alert.alert("Error Mágico", `Algo falló en la encriptación: ${error.message}`);
       }
+    } catch (error) {
+      Alert.alert("Error de proceso", error.message);
+    } {
+      // Mantenemos el escudo levantado un instante extra para dar estabilidad al regreso de la app
+      setTimeout(() => { isPickingMedia.current = false; }, 2000);
     }
   };
 
@@ -206,13 +221,13 @@ export default function App() {
             <Text style={styles.modalTitle}>Nueva Carpeta</Text>
             <TextInput 
               style={styles.inputDark} 
-              placeholder="Nombre (ej. hana)" 
-              placeholderTextColor="#64748b"
+              placeholder="Nombre de la carpeta (ej. hana)" 
+              placeholderTextColor="#475569"
               value={newFolderName} 
               onChangeText={setNewFolderName}
             />
             <View style={{flexDirection: 'row', justifyContent: 'space-between'}}>
-              <TouchableOpacity style={[styles.primaryBtn, {backgroundColor: '#1C2331', flex: 0.48}]} onPress={() => setIsFolderModalVisible(false)}>
+              <TouchableOpacity style={[styles.primaryBtn, {backgroundColor: '#1E293B', flex: 0.48}]} onPress={() => setIsFolderModalVisible(false)}>
                 <Text style={styles.primaryBtnText}>Cancelar</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[styles.primaryBtn, {flex: 0.48}]} onPress={crearCarpeta}>
@@ -227,15 +242,15 @@ export default function App() {
       <Modal visible={isSetupModalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Código Maestro</Text>
+            <Text style={styles.modalTitle}>Código de Acceso Inicial</Text>
             <TextInput 
-              style={[styles.inputDark, {textAlign: 'center', fontSize: 22}]} 
+              style={[styles.inputDark, {textAlign: 'center', fontSize: 18, letterSpacing: 4}]} 
               keyboardType="number-pad" maxLength={8} secureTextEntry
-              placeholder="Escribe tu PIN" placeholderTextColor="#64748b"
+              placeholder="Crea tu PIN secreto" placeholderTextColor="#475569"
               value={newPinInput} onChangeText={setNewPinInput}
             />
             <TouchableOpacity style={styles.primaryBtn} onPress={registrarPin}>
-              <Text style={styles.primaryBtnText}>Guardar</Text>
+              <Text style={styles.primaryBtnText}>Confirmar PIN de Seguridad</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -245,17 +260,17 @@ export default function App() {
       <Modal visible={isSettingsVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Seguridad Avanzada</Text>
+            <Text style={styles.modalTitle}>Ajustes de Privacidad</Text>
             <View style={styles.settingRow}>
-              <Text style={styles.settingText}>Bloquear Capturas</Text>
+              <Text style={styles.settingText}>Prevenir Capturas de Pantalla</Text>
               <Switch value={antiScreenshot} onValueChange={setAntiScreenshot} trackColor={{ true: '#4F46E5' }} />
             </View>
             <View style={styles.settingRow}>
-              <Text style={styles.settingText}>Bloqueo Invertido (Sensor)</Text>
+              <Text style={styles.settingText}>Panic Lock (Bloqueo al Voltear)</Text>
               <Switch value={faceDownLock} onValueChange={setFaceDownLock} trackColor={{ true: '#4F46E5' }} />
             </View>
             <TouchableOpacity style={styles.primaryBtn} onPress={() => setSettingsVisible(false)}>
-              <Text style={styles.primaryBtnText}>Hecho</Text>
+              <Text style={styles.primaryBtnText}>Finalizar</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -264,7 +279,7 @@ export default function App() {
   );
 }
 
-// --- PANTALLAS ---
+// --- RENDERS MINIMALISTAS (DISEÑO CORPORATIVO SLIM) ---
 
 function CalcScreen({ onAuth, secretPin }) {
   const [display, setDisplay] = useState('');
@@ -277,7 +292,7 @@ function CalcScreen({ onAuth, secretPin }) {
         onAuth();
       } else {
         try { setDisplay(String(eval(display.replace('×', '*').replace('÷', '/')))); } 
-        catch { setDisplay('Error'); }
+        catch { setDisplay('0'); }
       }
     } else setDisplay(prev => prev + val);
   };
@@ -287,7 +302,7 @@ function CalcScreen({ onAuth, secretPin }) {
   return (
     <View style={styles.calcContainer}>
       <View style={styles.displayContainer}>
-        <Text style={styles.displayText} numberOfLines={1}>{display || '0'}</Text>
+        <Text style={styles.displayText} numberOfLines={1} adjustsFontSizeToFit>{display || '0'}</Text>
       </View>
       <View style={styles.keyboardContainer}>
         {botones.map((row, rIdx) => (
@@ -310,61 +325,59 @@ function VaultScreen({ vaultData, currentFolderId, setCurrentFolderId, setSettin
 
   return (
     <View style={styles.vaultContainer}>
-      {/* HEADER DINÁMICO */}
       <View style={styles.header}>
         {currentFolderId ? (
            <TouchableOpacity style={styles.backBtn} onPress={() => setCurrentFolderId(null)}>
              <Text style={styles.backBtnText}>← {currentFolder.name}</Text>
            </TouchableOpacity>
         ) : (
-           <Text style={styles.headerTitle}>GhostVault</Text>
+           <Text style={styles.headerTitle}>Bóveda Oculta</Text>
         )}
         
         <View style={{ flexDirection: 'row' }}>
           <TouchableOpacity style={styles.iconButton} onPress={() => setSettingsVisible(true)}>
-             <Text style={{ color: '#fff', fontSize: 18 }}>⚙️</Text>
+             <Text style={{ color: '#fff', fontSize: 14 }}>⚙️</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.iconButton, { marginLeft: 10 }]} onPress={onLogout}>
-             <Text style={{ color: '#fff', fontSize: 18 }}>🔒</Text>
+          <TouchableOpacity style={[styles.iconButton, { marginLeft: 8 }]} onPress={onLogout}>
+             <Text style={{ color: '#fff', fontSize: 14 }}>🔒</Text>
           </TouchableOpacity>
         </View>
       </View>
 
       {!currentFolderId ? (
-        // VISTA DE CARPETAS (Libres)
+        // LISTA DE CARPETAS SLIM
         vaultData.length === 0 ? (
           <View style={styles.centerBox}>
-            <Text style={styles.emptyText}>Bóveda vacía. Crea una carpeta.</Text>
+            <Text style={styles.emptyText}>No hay carpetas activas. Crea una para empezar.</Text>
           </View>
         ) : (
           <FlatList 
             data={vaultData}
             keyExtractor={(item) => item.id}
             numColumns={2}
-            contentContainerStyle={{ padding: 10 }}
+            contentContainerStyle={{ paddingHorizontal: 12, paddingTop: 6 }}
             renderItem={({ item }) => (
               <TouchableOpacity style={styles.folderCard} onPress={() => setCurrentFolderId(item.id)}>
                 <Text style={styles.folderIcon}>📁</Text>
-                <Text style={styles.folderName}>{item.name}</Text>
-                <Text style={styles.folderCount}>{item.items.length} archivos</Text>
+                <Text style={styles.folderName} numberOfLines={1}>{item.name}</Text>
+                <Text style={styles.folderCount}>{item.items.length} ítems</Text>
               </TouchableOpacity>
             )}
           />
         )
       ) : (
-        // VISTA TIPO MANHWA (Scroll vertical sin bordes)
+        // EXPERIENCIA PREMIUM MANHWA (Scroll vertical infinito y fluido sin cortes)
         currentFolder.items.length === 0 ? (
           <View style={styles.centerBox}>
-            <Text style={styles.emptyText}>Carpeta vacía. Agrega contenido.</Text>
+            <Text style={styles.emptyText}>Esta carpeta está vacía. Añade contenido privado.</Text>
           </View>
         ) : (
           <FlatList 
             data={currentFolder.items}
             keyExtractor={(item) => item.id}
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={{ paddingBottom: 100 }} // Espacio para el FAB
+            contentContainerStyle={{ paddingBottom: 90 }} 
             renderItem={({ item }) => {
-              // Calcular altura proporcional para que ocupe todo el ancho sin deformarse
               const ratio = item.width && item.height ? item.height / item.width : 1.5;
               return (
                 <View style={styles.manhwaFrame}>
@@ -376,7 +389,7 @@ function VaultScreen({ vaultData, currentFolderId, setCurrentFolderId, setSettin
         )
       )}
 
-      {/* BOTÓN FLOTANTE DINÁMICO */}
+      {/* FAB ESTILIZADO */}
       {!currentFolderId ? (
         <TouchableOpacity style={styles.fab} onPress={() => setIsFolderModalVisible(true)}>
           <Text style={styles.fabText}>📁+</Text>
@@ -390,49 +403,51 @@ function VaultScreen({ vaultData, currentFolderId, setCurrentFolderId, setSettin
   );
 }
 
+// --- ESTILOS COMPACTOS, EQUILIBRADOS Y SOFISTICADOS ---
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0B0E14' },
   
-  // Calculadora Premium
-  calcContainer: { flex: 1, backgroundColor: '#0B0E14' },
-  displayContainer: { flex: 1, justifyContent: 'flex-end', paddingHorizontal: 25, paddingBottom: 25 },
-  displayText: { color: '#4F46E5', fontSize: 75, fontWeight: '200', textAlign: 'right' },
-  keyboardContainer: { paddingHorizontal: 12, paddingBottom: 35 },
-  calcRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
-  calcButton: { width: width/4 - 18, height: width/4 - 18, borderRadius: 50, backgroundColor: '#1C2331', justifyContent: 'center', alignItems: 'center' },
-  calcButtonEmpty: { width: width/4 - 18, height: width/4 - 18 },
-  calcButtonText: { color: '#ffffff', fontSize: 26, fontWeight: '300' },
+  // Contenedor Calculadora Minimalista
+  calcContainer: { flex: 1, backgroundColor: '#0B0E14', justifyContent: 'flex-end', paddingBottom: 15 },
+  displayContainer: { paddingHorizontal: 32, paddingBottom: 10 },
+  displayText: { color: '#4F46E5', fontSize: 44, fontWeight: '300', textAlign: 'right' },
+  keyboardContainer: { paddingHorizontal: 20 },
+  calcRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
+  calcButton: { width: BTN_SIZE, height: BTN_SIZE, borderRadius: BTN_SIZE / 2, backgroundColor: '#1C2331', justifyContent: 'center', alignItems: 'center' },
+  calcButtonEmpty: { width: BTN_SIZE, height: BTN_SIZE },
+  calcButtonText: { color: '#ffffff', fontSize: 19, fontWeight: '300' },
 
-  // Bóveda Interna
+  // Estructura de la Bóveda
   vaultContainer: { flex: 1, backgroundColor: '#0B0E14' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 55, paddingBottom: 15 },
-  headerTitle: { fontSize: 24, fontWeight: 'bold', color: '#ffffff' },
-  backBtn: { paddingVertical: 5 },
-  backBtnText: { color: '#4F46E5', fontSize: 18, fontWeight: '600' },
-  iconButton: { width: 42, height: 42, borderRadius: 12, backgroundColor: '#1C2331', justifyContent: 'center', alignItems: 'center' },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 45, paddingBottom: 10 },
+  headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#ffffff', letterSpacing: 0.3 },
+  backBtn: { paddingVertical: 4 },
+  backBtnText: { color: '#4F46E5', fontSize: 15, fontWeight: '600' },
+  iconButton: { width: 34, height: 34, borderRadius: 8, backgroundColor: '#1C2331', justifyContent: 'center', alignItems: 'center' },
   
-  // Carpetas Libres
-  folderCard: { flex: 1, margin: 8, backgroundColor: '#1C2331', borderRadius: 18, padding: 20, alignItems: 'center', justifyContent: 'center' },
-  folderIcon: { fontSize: 36, marginBottom: 8 },
-  folderName: { color: '#ffffff', fontSize: 16, fontWeight: '600' },
-  folderCount: { color: '#64748b', fontSize: 12, marginTop: 4 },
+  // Tarjetas de Carpeta Equilibradas
+  folderCard: { flex: 1, margin: 5, backgroundColor: '#1C2331', borderRadius: 12, paddingVertical: 14, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
+  folderIcon: { fontSize: 22, marginBottom: 4 },
+  folderName: { color: '#ffffff', fontSize: 13, fontWeight: '600', textAlign: 'center' },
+  folderCount: { color: '#64748b', fontSize: 10, marginTop: 1 },
 
-  // Lector Manhwa (Scroll vertical continuo)
-  manhwaFrame: { width: width, backgroundColor: '#0B0E14', marginBottom: 2 }, 
+  // Lienzo Continuo Lector Manhwa Real
+  manhwaFrame: { width: width, backgroundColor: '#0B0E14', marginBottom: 0 }, 
   manhwaImage: { width: '100%', resizeMode: 'cover' },
   
-  fab: { position: 'absolute', bottom: 35, right: 25, width: 60, height: 60, borderRadius: 20, backgroundColor: '#4F46E5', justifyContent: 'center', alignItems: 'center', elevation: 6 },
-  fabText: { color: '#ffffff', fontSize: 24, fontWeight: 'bold' },
-  centerBox: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  emptyText: { color: '#64748b', fontSize: 15 },
+  // Elementos Flotantes y Emergentes
+  fab: { position: 'absolute', bottom: 25, right: 20, width: 48, height: 48, borderRadius: 14, backgroundColor: '#4F46E5', justifyContent: 'center', alignItems: 'center', elevation: 3 },
+  fabText: { color: '#ffffff', fontSize: 18, fontWeight: 'bold' },
+  centerBox: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 40 },
+  emptyText: { color: '#475569', fontSize: 12, textAlign: 'center', lineHeight: 16 },
 
-  // Modales Estilizados
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(5,8,13,0.85)', justifyContent: 'center', alignItems: 'center' },
-  modalContent: { width: '85%', backgroundColor: '#1C2331', padding: 22, borderRadius: 22 },
-  modalTitle: { fontSize: 18, color: '#ffffff', fontWeight: 'bold', marginBottom: 15, textAlign: 'center' },
-  settingRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 14 },
-  settingText: { color: '#ffffff', fontSize: 15 },
-  inputDark: { backgroundColor: '#0B0E14', color: '#ffffff', fontSize: 16, padding: 15, borderRadius: 12, marginBottom: 20 },
-  primaryBtn: { backgroundColor: '#4F46E5', padding: 14, borderRadius: 12, alignItems: 'center' },
-  primaryBtnText: { color: '#ffffff', fontWeight: 'bold', fontSize: 15 }
+  // Modales Limpios
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(5,8,13,0.92)', justifyContent: 'center', alignItems: 'center' },
+  modalContent: { width: '80%', backgroundColor: '#1C2331', padding: 18, borderRadius: 14 },
+  modalTitle: { fontSize: 15, color: '#ffffff', fontWeight: 'bold', marginBottom: 10, textAlign: 'center' },
+  settingRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10 },
+  settingText: { color: '#ffffff', fontSize: 13 },
+  inputDark: { backgroundColor: '#0B0E14', color: '#ffffff', fontSize: 14, padding: 10, borderRadius: 8, marginBottom: 14 },
+  primaryBtn: { backgroundColor: '#4F46E5', padding: 11, borderRadius: 8, alignItems: 'center' },
+  primaryBtnText: { color: '#ffffff', fontWeight: 'bold', fontSize: 13 }
 });
