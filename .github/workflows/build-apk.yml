@@ -1,4 +1,4 @@
-Name: Compilar APK de Expo Gratis Optimizado
+name: Compilar APK de Expo Gratis Optimizado
 
 on:
   workflow_dispatch: # Permite activar la compilación manualmente desde tu teléfono
