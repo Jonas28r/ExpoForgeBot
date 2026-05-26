@@ -1,4 +1,4 @@
-name: Compilar APK de Expo Gratis Optimizado
+Name: Compilar APK de Expo Gratis Optimizado
 
 on:
   workflow_dispatch: # Permite activar la compilación manualmente desde tu teléfono
@@ -6,12 +6,15 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # CRUCIAL: Otorga permisos al Bot para guardar los cambios del lockfile en tu repositorio
+    permissions:
+      contents: write
 
     steps:
       - name: Clonar repositorio
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }} # Da permiso para guardar el archivo nuevo
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Configurar Node.js (Actualizado para SDK 54)
         uses: actions/setup-node@v4
@@ -39,11 +42,13 @@ jobs:
       # Instalación inteligente y resolución de los asteriscos (*)
       - name: Instalar y corregir dependencias (Expo Fix)
         run: |
-          npm install --legacy-peer-deps
+          # Fuerza a npm y a expo a ignorar conflictos de React 19 con paquetes antiguos
+          npm config set legacy-peer-deps true
+          npm install
           npx expo install --fix
 
-      # SOLUCIÓN: Guardamos no solo el lock, sino también el package.json limpio
-      - name: Guardar package.json actualizado en el repositorio
+      # SOLUCIÓN: El servidor genera el package-lock.json correcto y lo sube por ti
+      - name: Guardar package.json y lockfile actualizados en el repositorio
         run: |
           git config --global user.name "GitHub Action Bot"
           git config --global user.email "actions@github.com"
