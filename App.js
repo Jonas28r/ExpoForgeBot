@@ -1,29 +1,23 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   StyleSheet, View, Text, TouchableOpacity, FlatList, Modal, 
-  StatusBar, Alert, Switch, Image, Dimensions, AppState, TextInput 
+  StatusBar, Alert, Image, Dimensions, TextInput 
 } from 'react-native';
-import { Accelerometer } from 'expo-sensors';
-import * as ScreenCapture from 'expo-screen-capture';
-import * as FileSystem from 'expo-file-system/legacy'; 
+import * as FileSystem from 'expo-file-system'; // API Moderna corregida
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
+import { Video, ResizeMode } from 'expo-av'; // Soporte para reproducir videos
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width, height } = Dimensions.get('window');
-const VAULT_DIR = `${FileSystem.documentDirectory}.ghost_vault/`;
-const BTN_SIZE = width * 0.175; // Tamaño de botón estilizado y más compacto
+const VAULT_DIR = `${FileSystem.documentDirectory}mi_boveda_secreta/`;
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [antiScreenshot, setAntiScreenshot] = useState(false);
-  const [faceDownLock, setFaceDownLock] = useState(false);
-  const [isSettingsVisible, setSettingsVisible] = useState(false);
-  
-  // Bóveda dinámica completamente libre para el usuario
   const [vaultData, setVaultData] = useState([]);
-  
   const [currentFolderId, setCurrentFolderId] = useState(null); 
+  
+  // Modales
   const [isFolderModalVisible, setIsFolderModalVisible] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   
@@ -31,246 +25,166 @@ export default function App() {
   const [isSetupModalVisible, setIsSetupModalVisible] = useState(false);
   const [newPinInput, setNewPinInput] = useState('');
 
-  // ESCUDO TOTAL: Bloquea cualquier intento de desautenticación deliberada
-  const isPickingMedia = useRef(false);
-
   useEffect(() => {
     const inicializarBoveda = async () => {
       try {
-        const pinGuardado = await AsyncStorage.getItem('@secret_pin');
+        const pinGuardado = await AsyncStorage.getItem('@pin_seguro');
         if (pinGuardado) setSecretPin(pinGuardado);
         else setIsSetupModalVisible(true);
 
-        const datosGuardados = await AsyncStorage.getItem('@vault_folders_v4');
+        const datosGuardados = await AsyncStorage.getItem('@vault_data_v5');
         if (datosGuardados) setVaultData(JSON.parse(datosGuardados));
-
-        const savedAntiScreenshot = await AsyncStorage.getItem('@setting_screenshot');
-        const savedFaceDown = await AsyncStorage.getItem('@setting_facedown');
-        if (savedAntiScreenshot) setAntiScreenshot(JSON.parse(savedAntiScreenshot));
-        if (savedFaceDown) setFaceDownLock(JSON.parse(savedFaceDown));
-
       } catch (error) {
-        console.error("Error al inicializar:", error);
+        console.error("Error inicializando:", error);
       }
     };
     inicializarBoveda();
   }, []);
 
-  // Control de estado de la aplicación con escudo blindado
-  useEffect(() => {
-    const subscription = AppState.addEventListener('change', nextAppState => {
-      if (nextAppState.match(/inactive|background/)) {
-        if (isPickingMedia.current) {
-          // Si estamos eligiendo fotos, ignoramos por completo el cierre de fondo
-          return;
-        }
-        setIsAuthenticated(false);
-        setSettingsVisible(false);
-      }
-    });
-    return () => subscription.remove();
-  }, []);
-
-  const guardarEstructura = async (nuevosDatos) => {
+  const guardarDatos = async (nuevosDatos) => {
     setVaultData(nuevosDatos);
-    await AsyncStorage.setItem('@vault_folders_v4', JSON.stringify(nuevosDatos));
+    await AsyncStorage.setItem('@vault_data_v5', JSON.stringify(nuevosDatos));
   };
 
   const registrarPin = async () => {
     if (newPinInput.length < 4) {
-      Alert.alert("Error", "El código debe tener mínimo 4 números.");
+      Alert.alert("Aviso", "El código debe tener al menos 4 números.");
       return;
     }
-    await AsyncStorage.setItem('@secret_pin', newPinInput);
+    await AsyncStorage.setItem('@pin_seguro', newPinInput);
     setSecretPin(newPinInput);
     setIsSetupModalVisible(false);
-    setNewPinInput('');
   };
 
   const crearCarpeta = async () => {
     if (newFolderName.trim() === '') return;
-    const nuevaCarpeta = {
-      id: `folder_${Date.now()}`,
-      name: newFolderName,
-      items: []
-    };
-    const nuevaEstructura = [...vaultData, nuevaCarpeta];
-    await guardarEstructura(nuevaEstructura);
+    const nuevaCarpeta = { id: `folder_${Date.now()}`, name: newFolderName, items: [] };
+    await guardarDatos([...vaultData, nuevaCarpeta]);
     setNewFolderName('');
     setIsFolderModalVisible(false);
   };
 
-  useEffect(() => {
-    if (antiScreenshot) ScreenCapture.preventScreenCaptureAsync();
-    else ScreenCapture.allowScreenCaptureAsync();
-    AsyncStorage.setItem('@setting_screenshot', JSON.stringify(antiScreenshot));
-  }, [antiScreenshot]);
-
-  // ESCUDO DEL ACELERÓMETRO: Verificación dinámica en tiempo real
-  useEffect(() => {
-    let subscription;
-    if (faceDownLock && isAuthenticated) {
-      subscription = Accelerometer.addListener(({ z }) => {
-        // Si el escudo está activo, el sensor no puede bloquear la pantalla
-        if (!isPickingMedia.current && z < -0.85) {
-          setIsAuthenticated(false);
-        }
-      });
-      Accelerometer.setUpdateInterval(300);
-    }
-    AsyncStorage.setItem('@setting_facedown', JSON.stringify(faceDownLock));
-    return () => subscription && subscription.remove();
-  }, [faceDownLock, isAuthenticated]);
-
-  const importarArchivoMagico = async () => {
+  // Función corregida para pedir permisos y ocultar archivos
+  const ocultarArchivo = async () => {
     if (!currentFolderId) return;
 
-    // Levantar el escudo antes de invocar cualquier interfaz nativa del teléfono
-    isPickingMedia.current = true; 
-
     try {
-      const pickerPermission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      const mediaPermission = await MediaLibrary.requestPermissionsAsync();
-
-      if (!pickerPermission.granted || !mediaPermission.granted) {
-        Alert.alert("Permiso Requerido", "Necesitamos acceso para ocultar tus fotos de forma profesional.");
-        isPickingMedia.current = false;
+      // 1. Solicitar permisos EXPLÍCITAMENTE
+      const { status: mediaStatus } = await MediaLibrary.requestPermissionsAsync();
+      if (mediaStatus !== 'granted') {
+        Alert.alert("Permiso Denegado", "Se requieren permisos para poder ocultar tus archivos.");
         return;
       }
 
+      // 2. Abrir selector permitiendo Imágenes y Videos
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.All,
-        allowsEditing: false,
         quality: 1,
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
-        const assetSeleccionado = result.assets[0];
-        const nombreEncriptado = `enc_${Date.now()}.dat`; 
-        const rutaDestino = `${VAULT_DIR}${nombreEncriptado}`;
+        const asset = result.assets[0];
+        const isVideo = asset.type === 'video';
+        const fileName = `secreto_${Date.now()}.${isVideo ? 'mp4' : 'jpg'}`;
+        const destPath = `${VAULT_DIR}${fileName}`;
 
-        const folderInfo = await FileSystem.getInfoAsync(VAULT_DIR);
-        if (!folderInfo.exists) {
+        // 3. Crear directorio usando la API Moderna de Expo
+        const dirInfo = await FileSystem.getInfoAsync(VAULT_DIR);
+        if (!dirInfo.exists) {
           await FileSystem.makeDirectoryAsync(VAULT_DIR, { intermediates: true });
         }
-        await FileSystem.writeAsStringAsync(`${VAULT_DIR}.nomedia`, '');
 
-        // Mover a la zona segura oculta
-        await FileSystem.copyAsync({
-          from: assetSeleccionado.uri,
-          to: rutaDestino,
-        });
+        // 4. Mover a zona segura
+        await FileSystem.copyAsync({ from: asset.uri, to: destPath });
 
+        // 5. Guardar en el estado de la app
         const carpetasActualizadas = vaultData.map(folder => {
           if (folder.id === currentFolderId) {
             return {
               ...folder,
               items: [...folder.items, { 
-                id: nombreEncriptado, 
-                uri: rutaDestino, 
-                width: assetSeleccionado.width, 
-                height: assetSeleccionado.height,
-                assetId: assetSeleccionado.assetId
+                id: fileName, uri: destPath, isVideo: isVideo, 
+                width: asset.width, height: asset.height, assetId: asset.assetId
               }]
             };
           }
           return folder;
         });
 
-        await guardarEstructura(carpetasActualizadas);
+        await guardarDatos(carpetasActualizadas);
 
-        // BORRADO SEGURO
-        if (assetSeleccionado.assetId) {
+        // 6. Eliminar el archivo original de la galería pública
+        if (asset.assetId) {
           try {
-            await MediaLibrary.deleteAssetsAsync([assetSeleccionado.assetId]);
+            await MediaLibrary.deleteAssetsAsync([asset.assetId]);
           } catch (e) {
-            console.log("Bypass de eliminación silenciosa nativa activa.");
+            console.log("No se pudo borrar automáticamente el original.");
           }
         }
       }
     } catch (error) {
-      Alert.alert("Error de proceso", error.message);
-    } {
-      // Mantenemos el escudo levantado un instante extra para dar estabilidad al regreso de la app
-      setTimeout(() => { isPickingMedia.current = false; }, 2000);
+      Alert.alert("Error", "Ocurrió un problema moviendo el archivo.");
+      console.error(error);
     }
+  };
+
+  const handleLogin = () => {
+    setIsAuthenticated(true);
+    setCurrentFolderId(null); // CORRECCIÓN: Evita quedar atrapado en el visor al entrar
   };
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#0B0E14" />
+      <StatusBar barStyle="light-content" backgroundColor="#050505" />
       
       {isAuthenticated ? (
         <VaultScreen 
           vaultData={vaultData}
           currentFolderId={currentFolderId}
           setCurrentFolderId={setCurrentFolderId}
-          setSettingsVisible={setSettingsVisible}
           setIsFolderModalVisible={setIsFolderModalVisible}
-          onAddFile={importarArchivoMagico}
+          onAddFile={ocultarArchivo}
           onLogout={() => setIsAuthenticated(false)}
         />
       ) : (
-        <CalcScreen onAuth={() => setIsAuthenticated(true)} secretPin={secretPin} />
+        <CalcScreen onAuth={handleLogin} secretPin={secretPin} />
       )}
 
-      {/* MODAL CREAR CARPETA */}
+      {/* MODALES DE CONFIGURACIÓN */}
       <Modal visible={isFolderModalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Nueva Carpeta</Text>
+            <Text style={styles.modalTitle}>Nueva Tarjeta/Carpeta</Text>
             <TextInput 
               style={styles.inputDark} 
-              placeholder="Nombre de la carpeta (ej. hana)" 
-              placeholderTextColor="#475569"
+              placeholder="Nombre (ej. Privado)" 
+              placeholderTextColor="#666"
               value={newFolderName} 
               onChangeText={setNewFolderName}
             />
-            <View style={{flexDirection: 'row', justifyContent: 'space-between'}}>
-              <TouchableOpacity style={[styles.primaryBtn, {backgroundColor: '#1E293B', flex: 0.48}]} onPress={() => setIsFolderModalVisible(false)}>
-                <Text style={styles.primaryBtnText}>Cancelar</Text>
+            <View style={styles.modalRow}>
+              <TouchableOpacity style={styles.btnCancel} onPress={() => setIsFolderModalVisible(false)}>
+                <Text style={styles.btnText}>Cancelar</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.primaryBtn, {flex: 0.48}]} onPress={crearCarpeta}>
-                <Text style={styles.primaryBtnText}>Crear</Text>
+              <TouchableOpacity style={styles.btnConfirm} onPress={crearCarpeta}>
+                <Text style={styles.btnText}>Crear</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
-      {/* MODAL CONFIGURACIÓN PIN */}
       <Modal visible={isSetupModalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Código de Acceso Inicial</Text>
+            <Text style={styles.modalTitle}>Crea tu PIN Secreto</Text>
             <TextInput 
-              style={[styles.inputDark, {textAlign: 'center', fontSize: 18, letterSpacing: 4}]} 
+              style={[styles.inputDark, {textAlign: 'center', fontSize: 20, letterSpacing: 5}]} 
               keyboardType="number-pad" maxLength={8} secureTextEntry
-              placeholder="Crea tu PIN secreto" placeholderTextColor="#475569"
               value={newPinInput} onChangeText={setNewPinInput}
             />
-            <TouchableOpacity style={styles.primaryBtn} onPress={registrarPin}>
-              <Text style={styles.primaryBtnText}>Confirmar PIN de Seguridad</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      {/* MODAL AJUSTES */}
-      <Modal visible={isSettingsVisible} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Ajustes de Privacidad</Text>
-            <View style={styles.settingRow}>
-              <Text style={styles.settingText}>Prevenir Capturas de Pantalla</Text>
-              <Switch value={antiScreenshot} onValueChange={setAntiScreenshot} trackColor={{ true: '#4F46E5' }} />
-            </View>
-            <View style={styles.settingRow}>
-              <Text style={styles.settingText}>Panic Lock (Bloqueo al Voltear)</Text>
-              <Switch value={faceDownLock} onValueChange={setFaceDownLock} trackColor={{ true: '#4F46E5' }} />
-            </View>
-            <TouchableOpacity style={styles.primaryBtn} onPress={() => setSettingsVisible(false)}>
-              <Text style={styles.primaryBtnText}>Finalizar</Text>
+            <TouchableOpacity style={styles.btnConfirm} onPress={registrarPin}>
+              <Text style={styles.btnText}>Guardar PIN</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -279,12 +193,11 @@ export default function App() {
   );
 }
 
-// --- RENDERS MINIMALISTAS (DISEÑO CORPORATIVO SLIM) ---
-
+// ------------------- PANTALLA CALCULADORA (FACHADA FULL SCREEN) -------------------
 function CalcScreen({ onAuth, secretPin }) {
   const [display, setDisplay] = useState('');
 
-  const pressBotón = (val) => {
+  const pressBtn = (val) => {
     if (val === 'C') setDisplay('');
     else if (val === '=') {
       if (display === secretPin && secretPin !== null) {
@@ -294,23 +207,39 @@ function CalcScreen({ onAuth, secretPin }) {
         try { setDisplay(String(eval(display.replace('×', '*').replace('÷', '/')))); } 
         catch { setDisplay('0'); }
       }
-    } else setDisplay(prev => prev + val);
+    } else {
+      setDisplay(prev => prev + val);
+    }
   };
 
-  const botones = [['C','(',')','÷'], ['7','8','9','×'], ['4','5','6','-'], ['1','2','3','+'], ['0','.','','=']];
+  const botones = [
+    ['C','(',')','÷'], 
+    ['7','8','9','×'], 
+    ['4','5','6','-'], 
+    ['1','2','3','+'], 
+    ['0','.','','=']
+  ];
 
   return (
-    <View style={styles.calcContainer}>
-      <View style={styles.displayContainer}>
-        <Text style={styles.displayText} numberOfLines={1} adjustsFontSizeToFit>{display || '0'}</Text>
+    <View style={styles.calcScreen}>
+      {/* El display toma todo el espacio superior disponible empujando el teclado abajo */}
+      <View style={styles.calcDisplayArea}>
+        <Text style={styles.calcDisplayText} numberOfLines={1} adjustsFontSizeToFit>
+          {display || '0'}
+        </Text>
       </View>
-      <View style={styles.keyboardContainer}>
+      
+      <View style={styles.calcKeypad}>
         {botones.map((row, rIdx) => (
           <View key={rIdx} style={styles.calcRow}>
             {row.map((b, bIdx) => (
-              b === '' ? <View key={bIdx} style={styles.calcButtonEmpty} /> :
-              <TouchableOpacity key={bIdx} style={styles.calcButton} onPress={() => pressBotón(b)}>
-                <Text style={[styles.calcButtonText, b === '=' && { color: '#4F46E5', fontWeight: 'bold' }]}>{b}</Text>
+              b === '' ? <View key={bIdx} style={styles.calcBtnEmpty} /> :
+              <TouchableOpacity 
+                key={bIdx} 
+                style={[styles.calcBtn, b === '=' && {backgroundColor: '#3b82f6'} ]} 
+                onPress={() => pressBtn(b)}
+              >
+                <Text style={styles.calcBtnText}>{b}</Text>
               </TouchableOpacity>
             ))}
           </View>
@@ -320,134 +249,137 @@ function CalcScreen({ onAuth, secretPin }) {
   );
 }
 
-function VaultScreen({ vaultData, currentFolderId, setCurrentFolderId, setSettingsVisible, setIsFolderModalVisible, onAddFile, onLogout }) {
+// ------------------- PANTALLA BÓVEDA (GALERÍA Y VISOR) -------------------
+function VaultScreen({ vaultData, currentFolderId, setCurrentFolderId, setIsFolderModalVisible, onAddFile, onLogout }) {
   const currentFolder = vaultData.find(f => f.id === currentFolderId);
 
   return (
-    <View style={styles.vaultContainer}>
-      <View style={styles.header}>
+    <View style={styles.vaultScreen}>
+      <View style={styles.vaultHeader}>
         {currentFolderId ? (
-           <TouchableOpacity style={styles.backBtn} onPress={() => setCurrentFolderId(null)}>
-             <Text style={styles.backBtnText}>← {currentFolder.name}</Text>
+           <TouchableOpacity style={styles.headerBtn} onPress={() => setCurrentFolderId(null)}>
+             <Text style={styles.headerBtnText}>← Volver</Text>
            </TouchableOpacity>
         ) : (
-           <Text style={styles.headerTitle}>Bóveda Oculta</Text>
+           <Text style={styles.headerTitle}>Mis Tarjetas</Text>
         )}
-        
-        <View style={{ flexDirection: 'row' }}>
-          <TouchableOpacity style={styles.iconButton} onPress={() => setSettingsVisible(true)}>
-             <Text style={{ color: '#fff', fontSize: 14 }}>⚙️</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.iconButton, { marginLeft: 8 }]} onPress={onLogout}>
-             <Text style={{ color: '#fff', fontSize: 14 }}>🔒</Text>
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity style={styles.lockBtn} onPress={onLogout}>
+           <Text style={{ fontSize: 20 }}>🔒</Text>
+        </TouchableOpacity>
       </View>
 
       {!currentFolderId ? (
-        // LISTA DE CARPETAS SLIM
-        vaultData.length === 0 ? (
-          <View style={styles.centerBox}>
-            <Text style={styles.emptyText}>No hay carpetas activas. Crea una para empezar.</Text>
-          </View>
-        ) : (
-          <FlatList 
-            data={vaultData}
-            keyExtractor={(item) => item.id}
-            numColumns={2}
-            contentContainerStyle={{ paddingHorizontal: 12, paddingTop: 6 }}
-            renderItem={({ item }) => (
-              <TouchableOpacity style={styles.folderCard} onPress={() => setCurrentFolderId(item.id)}>
-                <Text style={styles.folderIcon}>📁</Text>
-                <Text style={styles.folderName} numberOfLines={1}>{item.name}</Text>
-                <Text style={styles.folderCount}>{item.items.length} ítems</Text>
-              </TouchableOpacity>
-            )}
-          />
-        )
+        // 1. VISTA DE GALERÍA DE TARJETAS
+        <FlatList 
+          data={vaultData}
+          keyExtractor={item => item.id}
+          numColumns={2}
+          contentContainerStyle={{ padding: 10, paddingBottom: 100 }}
+          renderItem={({ item }) => (
+            <TouchableOpacity style={styles.card} onPress={() => setCurrentFolderId(item.id)}>
+              <View style={styles.cardContent}>
+                <Text style={{ fontSize: 32, marginBottom: 10 }}>📁</Text>
+                <Text style={styles.cardTitle} numberOfLines={1}>{item.name}</Text>
+                <Text style={styles.cardSubtitle}>{item.items.length} ítems</Text>
+              </View>
+            </TouchableOpacity>
+          )}
+          ListEmptyComponent={
+            <Text style={styles.emptyText}>No tienes tarjetas creadas. Presiona el + para empezar.</Text>
+          }
+        />
       ) : (
-        // EXPERIENCIA PREMIUM MANHWA (Scroll vertical infinito y fluido sin cortes)
-        currentFolder.items.length === 0 ? (
-          <View style={styles.centerBox}>
-            <Text style={styles.emptyText}>Esta carpeta está vacía. Añade contenido privado.</Text>
-          </View>
-        ) : (
-          <FlatList 
-            data={currentFolder.items}
-            keyExtractor={(item) => item.id}
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={{ paddingBottom: 90 }} 
-            renderItem={({ item }) => {
-              const ratio = item.width && item.height ? item.height / item.width : 1.5;
+        // 2. VISOR TIPO MANHWA / VIDEOS
+        <FlatList 
+          data={currentFolder.items}
+          keyExtractor={item => item.id}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingBottom: 100 }} 
+          renderItem={({ item }) => {
+            if (item.isVideo) {
               return (
-                <View style={styles.manhwaFrame}>
-                  <Image source={{ uri: item.uri }} style={[styles.manhwaImage, { height: width * ratio }]} />
+                <View style={styles.mediaContainer}>
+                  <Video
+                    source={{ uri: item.uri }}
+                    style={styles.mediaVideo}
+                    useNativeControls
+                    resizeMode={ResizeMode.CONTAIN}
+                    isLooping
+                  />
                 </View>
               );
-            }}
-          />
-        )
+            } else {
+              const ratio = item.width && item.height ? item.height / item.width : 1.5;
+              return (
+                <View style={styles.mediaContainer}>
+                  <Image source={{ uri: item.uri }} style={[styles.mediaImage, { height: width * ratio }]} />
+                </View>
+              );
+            }
+          }}
+          ListEmptyComponent={
+            <Text style={styles.emptyText}>Carpeta vacía. Presiona + para ocultar fotos o videos aquí.</Text>
+          }
+        />
       )}
 
-      {/* FAB ESTILIZADO */}
-      {!currentFolderId ? (
-        <TouchableOpacity style={styles.fab} onPress={() => setIsFolderModalVisible(true)}>
-          <Text style={styles.fabText}>📁+</Text>
-        </TouchableOpacity>
-      ) : (
-        <TouchableOpacity style={styles.fab} onPress={onAddFile}>
-          <Text style={styles.fabText}>+</Text>
-        </TouchableOpacity>
-      )}
+      {/* BOTÓN FLOTANTE DINÁMICO */}
+      <TouchableOpacity 
+        style={styles.fab} 
+        onPress={currentFolderId ? onAddFile : () => setIsFolderModalVisible(true)}
+      >
+        <Text style={styles.fabIcon}>{currentFolderId ? '+' : '📁+'}</Text>
+      </TouchableOpacity>
     </View>
   );
 }
 
-// --- ESTILOS COMPACTOS, EQUILIBRADOS Y SOFISTICADOS ---
+// ------------------- ESTILOS GENERALES -------------------
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0B0E14' },
+  container: { flex: 1, backgroundColor: '#050505' },
   
-  // Contenedor Calculadora Minimalista
-  calcContainer: { flex: 1, backgroundColor: '#0B0E14', justifyContent: 'flex-end', paddingBottom: 15 },
-  displayContainer: { paddingHorizontal: 32, paddingBottom: 10 },
-  displayText: { color: '#4F46E5', fontSize: 44, fontWeight: '300', textAlign: 'right' },
-  keyboardContainer: { paddingHorizontal: 20 },
-  calcRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
-  calcButton: { width: BTN_SIZE, height: BTN_SIZE, borderRadius: BTN_SIZE / 2, backgroundColor: '#1C2331', justifyContent: 'center', alignItems: 'center' },
-  calcButtonEmpty: { width: BTN_SIZE, height: BTN_SIZE },
-  calcButtonText: { color: '#ffffff', fontSize: 19, fontWeight: '300' },
+  // Calculadora
+  calcScreen: { flex: 1, backgroundColor: '#000000' },
+  calcDisplayArea: { flex: 1, justifyContent: 'flex-end', padding: 30 },
+  calcDisplayText: { color: '#ffffff', fontSize: 60, fontWeight: '300', textAlign: 'right' },
+  calcKeypad: { paddingHorizontal: 15, paddingBottom: 30 },
+  calcRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 },
+  calcBtn: { width: (width / 4) - 20, height: (width / 4) - 20, borderRadius: 100, backgroundColor: '#1e1e1e', justifyContent: 'center', alignItems: 'center' },
+  calcBtnEmpty: { width: (width / 4) - 20, height: (width / 4) - 20 },
+  calcBtnText: { color: '#ffffff', fontSize: 28, fontWeight: '400' },
 
-  // Estructura de la Bóveda
-  vaultContainer: { flex: 1, backgroundColor: '#0B0E14' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 45, paddingBottom: 10 },
-  headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#ffffff', letterSpacing: 0.3 },
-  backBtn: { paddingVertical: 4 },
-  backBtnText: { color: '#4F46E5', fontSize: 15, fontWeight: '600' },
-  iconButton: { width: 34, height: 34, borderRadius: 8, backgroundColor: '#1C2331', justifyContent: 'center', alignItems: 'center' },
+  // Bóveda
+  vaultScreen: { flex: 1, backgroundColor: '#0f0f13' },
+  vaultHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 50, paddingBottom: 15, backgroundColor: '#1a1a24' },
+  headerTitle: { fontSize: 24, fontWeight: 'bold', color: '#ffffff' },
+  headerBtn: { padding: 5 },
+  headerBtnText: { color: '#3b82f6', fontSize: 18, fontWeight: '600' },
+  lockBtn: { padding: 5 },
+
+  // Tarjetas Modernas
+  card: { flex: 1, margin: 8, height: 140, backgroundColor: '#1e1e2d', borderRadius: 20, elevation: 5, overflow: 'hidden' },
+  cardContent: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 10 },
+  cardTitle: { color: '#ffffff', fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
+  cardSubtitle: { color: '#888', fontSize: 12, marginTop: 4 },
+
+  // Visor de Medios (Manhwa/Videos)
+  mediaContainer: { width: width, backgroundColor: '#000' },
+  mediaImage: { width: '100%', resizeMode: 'cover' },
+  mediaVideo: { width: width, height: width * 1.5 }, // Altura por defecto para videos verticales
   
-  // Tarjetas de Carpeta Equilibradas
-  folderCard: { flex: 1, margin: 5, backgroundColor: '#1C2331', borderRadius: 12, paddingVertical: 14, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
-  folderIcon: { fontSize: 22, marginBottom: 4 },
-  folderName: { color: '#ffffff', fontSize: 13, fontWeight: '600', textAlign: 'center' },
-  folderCount: { color: '#64748b', fontSize: 10, marginTop: 1 },
+  emptyText: { color: '#666', textAlign: 'center', marginTop: 50, paddingHorizontal: 40, fontSize: 16 },
 
-  // Lienzo Continuo Lector Manhwa Real
-  manhwaFrame: { width: width, backgroundColor: '#0B0E14', marginBottom: 0 }, 
-  manhwaImage: { width: '100%', resizeMode: 'cover' },
-  
-  // Elementos Flotantes y Emergentes
-  fab: { position: 'absolute', bottom: 25, right: 20, width: 48, height: 48, borderRadius: 14, backgroundColor: '#4F46E5', justifyContent: 'center', alignItems: 'center', elevation: 3 },
-  fabText: { color: '#ffffff', fontSize: 18, fontWeight: 'bold' },
-  centerBox: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 40 },
-  emptyText: { color: '#475569', fontSize: 12, textAlign: 'center', lineHeight: 16 },
+  // Elementos Flotantes
+  fab: { position: 'absolute', bottom: 30, right: 25, width: 60, height: 60, borderRadius: 30, backgroundColor: '#3b82f6', justifyContent: 'center', alignItems: 'center', elevation: 5 },
+  fabIcon: { color: '#fff', fontSize: 28, fontWeight: 'bold' },
 
-  // Modales Limpios
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(5,8,13,0.92)', justifyContent: 'center', alignItems: 'center' },
-  modalContent: { width: '80%', backgroundColor: '#1C2331', padding: 18, borderRadius: 14 },
-  modalTitle: { fontSize: 15, color: '#ffffff', fontWeight: 'bold', marginBottom: 10, textAlign: 'center' },
-  settingRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10 },
-  settingText: { color: '#ffffff', fontSize: 13 },
-  inputDark: { backgroundColor: '#0B0E14', color: '#ffffff', fontSize: 14, padding: 10, borderRadius: 8, marginBottom: 14 },
-  primaryBtn: { backgroundColor: '#4F46E5', padding: 11, borderRadius: 8, alignItems: 'center' },
-  primaryBtnText: { color: '#ffffff', fontWeight: 'bold', fontSize: 13 }
+  // Modales
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', alignItems: 'center' },
+  modalContent: { width: '85%', backgroundColor: '#1e1e2d', padding: 20, borderRadius: 20 },
+  modalTitle: { color: '#fff', fontSize: 18, fontWeight: 'bold', marginBottom: 15, textAlign: 'center' },
+  inputDark: { backgroundColor: '#12121a', color: '#fff', padding: 15, borderRadius: 10, marginBottom: 20 },
+  modalRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  btnCancel: { flex: 0.48, backgroundColor: '#333', padding: 15, borderRadius: 10, alignItems: 'center' },
+  btnConfirm: { flex: 0.48, backgroundColor: '#3b82f6', padding: 15, borderRadius: 10, alignItems: 'center' },
+  btnText: { color: '#fff', fontWeight: 'bold', fontSize: 16 }
 });
