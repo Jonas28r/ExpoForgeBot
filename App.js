@@ -1,16 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
-  StyleSheet, 
-  View, 
-  Text, 
-  TouchableOpacity, 
-  FlatList, 
-  Modal, 
-  StatusBar, 
-  Alert, 
-  Switch, 
-  Image, 
-  Dimensions 
+  StyleSheet, View, Text, TouchableOpacity, FlatList, Modal, 
+  StatusBar, Alert, Switch, Image, Dimensions, AppState, TextInput 
 } from 'react-native';
 import { Accelerometer } from 'expo-sensors';
 import * as ScreenCapture from 'expo-screen-capture';
@@ -19,97 +10,104 @@ import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const { width } = Dimensions.get('window');
+const { width, height } = Dimensions.get('window');
 const COLUMN_SIZE = width / 3 - 15;
 
-// Configuración de almacenamiento físico
 const VAULT_DIR = `${FileSystem.documentDirectory}.boveda_secreta/`;
-const PIN_SECRETO = "2580"; // <--- ESTE ES TU PIN PARA ENTRAR (Escribe 2580 y presiona '=')
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [antiScreenshot, setAntiScreenshot] = useState(false);
   const [faceDownLock, setFaceDownLock] = useState(false);
   const [isSettingsVisible, setSettingsVisible] = useState(false);
-  
-  // Estructura de la base de datos local
   const [vaultData, setVaultData] = useState({ items: [] });
+  
+  // Nuevo estado para el PIN
+  const [secretPin, setSecretPin] = useState(null);
+  const [isSetupModalVisible, setIsSetupModalVisible] = useState(false);
+  const [newPinInput, setNewPinInput] = useState('');
 
-  // 1. INICIALIZACIÓN: Cargar persistencia y crear directorios hito
+  // 1. CARGA INICIAL
   useEffect(() => {
     const inicializarApp = async () => {
       try {
-        // Crear carpeta oculta y archivo .nomedia si no existen
-        const folderInfo = await FileSystem.getInfoAsync(VAULT_DIR);
-        if (!folderInfo.exists) {
-          await FileSystem.makeDirectoryAsync(VAULT_DIR, { intermediates: true });
-        }
-        const nomediaUri = `${VAULT_DIR}.nomedia`;
-        const nomediaInfo = await FileSystem.getInfoAsync(nomediaUri);
-        if (!nomediaInfo.exists) {
-          await FileSystem.writeAsStringAsync(nomediaUri, '');
+        const pinGuardado = await AsyncStorage.getItem('@secret_pin');
+        if (pinGuardado) {
+          setSecretPin(pinGuardado);
+        } else {
+          setIsSetupModalVisible(true); // Mostrar modal de configuración inicial
         }
 
-        // Cargar Base de Datos Local (Nombres de archivos guardados)
         const savedData = await AsyncStorage.getItem('@vault_db');
-        if (savedData) {
-          setVaultData(JSON.parse(savedData));
-        }
+        if (savedData) setVaultData(JSON.parse(savedData));
 
-        // Cargar Ajustes de Seguridad de la memoria
         const savedAntiScreenshot = await AsyncStorage.getItem('@setting_screenshot');
         const savedFaceDown = await AsyncStorage.getItem('@setting_facedown');
         if (savedAntiScreenshot) setAntiScreenshot(JSON.parse(savedAntiScreenshot));
         if (savedFaceDown) setFaceDownLock(JSON.parse(savedFaceDown));
 
       } catch (error) {
-        console.error("Error inicializando la bóveda:", error);
+        console.error("Error inicializando:", error);
       }
     };
     inicializarApp();
   }, []);
 
-  // 2. PERSISTENCIA AUTOMÁTICA: Guardar base de datos cuando cambie el estado
+  // 2. SEGURIDAD: BLOQUEO AL MINIMIZAR LA APP
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      // Si la app pasa a segundo plano o se inactiva, bloqueamos inmediatamente
+      if (nextAppState.match(/inactive|background/)) {
+        setIsAuthenticated(false);
+        setSettingsVisible(false);
+      }
+    });
+    return () => subscription.remove();
+  }, []);
+
   const guardarDatosEnMemoria = async (nuevosDatos) => {
     setVaultData(nuevosDatos);
     await AsyncStorage.setItem('@vault_db', JSON.stringify(nuevosDatos));
   };
 
-  // 3. SEGURIDAD: Control Anti-Capturas de Pantalla
-  useEffect(() => {
-    if (antiScreenshot) {
-      ScreenCapture.preventScreenCaptureAsync();
-    } else {
-      ScreenCapture.allowScreenCaptureAsync();
+  const configurarNuevoPin = async () => {
+    if (newPinInput.length < 4) {
+      Alert.alert("Error", "El PIN debe tener al menos 4 números.");
+      return;
     }
+    await AsyncStorage.setItem('@secret_pin', newPinInput);
+    setSecretPin(newPinInput);
+    setIsSetupModalVisible(false);
+    setNewPinInput('');
+    Alert.alert("Éxito", "PIN configurado. Úsalo en la calculadora y presiona '=' para entrar.");
+  };
+
+  // SEGURIDAD: Sensores
+  useEffect(() => {
+    if (antiScreenshot) ScreenCapture.preventScreenCaptureAsync();
+    else ScreenCapture.allowScreenCaptureAsync();
     AsyncStorage.setItem('@setting_screenshot', JSON.stringify(antiScreenshot));
   }, [antiScreenshot]);
 
-  // 4. SEGURIDAD: Control del Sensor Boca Abajo (Giroscopio/Acelerómetro)
   useEffect(() => {
     let subscription;
     if (faceDownLock) {
-      // Monitorea el eje Z (boca abajo suele ser menor a -0.8 o -0.9)
       subscription = Accelerometer.addListener(({ z }) => {
-        if (z < -0.85) {
-          setIsAuthenticated(false); // Cierra la bóveda al instante
-        }
+        if (z < -0.85) setIsAuthenticated(false);
       });
-      Accelerometer.setUpdateInterval(300); // Muestreo rápido cada 300ms
+      Accelerometer.setUpdateInterval(300);
     }
     AsyncStorage.setItem('@setting_facedown', JSON.stringify(faceDownLock));
-
     return () => subscription && subscription.remove();
   }, [faceDownLock]);
 
-  // 5. IMPORTAR ARCHIVO REAL Y ENMASCARARLO
+  // OCULTAR ARCHIVO (Con validación estricta de carpeta)
   const ocultarNuevoArchivo = async () => {
-    // Pedir permisos de galería pública
     const pickerPermission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     const libraryPermission = await MediaLibrary.requestPermissionsAsync();
 
     if (!pickerPermission.granted || !libraryPermission.granted) {
-      Alert.alert("Permiso requerido", "Se necesitan accesos a la galería para cifrar los archivos.");
+      Alert.alert("Permisos", "Se requieren permisos para acceder a la galería.");
       return;
     }
 
@@ -121,74 +119,61 @@ export default function App() {
 
     if (!result.canceled && result.assets && result.assets.length > 0) {
       const assetOriginal = result.assets[0];
-      const uriOriginal = assetOriginal.uri;
-      const nombreOriginal = uriOriginal.split('/').pop();
-      
-      // Enmascaramiento a archivo binario genérico desvinculado de extensiones multimedia
       const nuevoNombre = `enc_${Date.now()}.dat`; 
       const destinoOculto = `${VAULT_DIR}${nuevoNombre}`;
 
       try {
-        // Copiar el archivo original a nuestro almacenamiento privado protegido
+        // FORZAR COMPROBACIÓN DE CARPETA JUSTO ANTES DE MOVER (Solución al error)
+        const folderInfo = await FileSystem.getInfoAsync(VAULT_DIR);
+        if (!folderInfo.exists) {
+          await FileSystem.makeDirectoryAsync(VAULT_DIR, { intermediates: true });
+        }
+        await FileSystem.writeAsStringAsync(`${VAULT_DIR}.nomedia`, '');
+
+        // Copiar archivo
         await FileSystem.copyAsync({
-          from: uriOriginal,
+          from: assetOriginal.uri,
           to: destinoOculto,
         });
 
-        // Actualizar Base de Datos JSON
+        // Guardar en DB local
         const nuevosItems = [...vaultData.items, { 
-          id: nuevoNombre, 
-          name: nombreOriginal, 
-          uri: destinoOculto 
+          id: nuevoNombre, name: assetOriginal.uri.split('/').pop(), uri: destinoOculto 
         }];
         await guardarDatosEnMemoria({ items: nuevosItems });
 
-        // ELIMINAR EL ORIGINAL DE LA GALERÍA PÚBLICA (Evita duplicados)
+        // Borrar original
         if (assetOriginal.assetId) {
           try {
             await MediaLibrary.deleteAssetsAsync([assetOriginal.assetId]);
-            Alert.alert("Éxito", "El archivo ha sido movido a la Bóveda Privada y eliminado de tu galería pública.");
           } catch (e) {
-            Alert.alert("Guardado", "El archivo se guardó en la Bóveda, pero debes borrar el original manualmente.");
+            console.log("No se pudo borrar automático de la galería pública.");
           }
-        } else {
-          Alert.alert("Éxito", "Archivo encriptado y movido exitosamente.");
         }
-
       } catch (error) {
-        Alert.alert("Error", "Ocurrió un problema al mover el archivo de manera segura.");
-        console.error(error);
+        Alert.alert("Error Crítico", `Detalle técnico: ${error.message}`);
       }
     }
   };
 
-  // 6. ELIMINAR ARCHIVO DEFINITIVAMENTE DE LA APP
   const eliminarArchivoFisico = async (item) => {
-    Alert.alert(
-      "Eliminar Archivo",
-      "¿Estás seguro de que deseas borrar permanentemente este archivo de la bóveda?",
-      [
-        { text: "Cancelar", style: "cancel" },
-        { 
-          text: "Eliminar", 
-          style: "destructive", 
-          onPress: async () => {
-            try {
-              await FileSystem.deleteAsync(item.uri, { idempotent: true });
-              const filtrados = vaultData.items.filter(i => i.id !== item.id);
-              await guardarDatosEnMemoria({ items: filtrados });
-            } catch (error) {
-              Alert.alert("Error", "No se pudo borrar el archivo del almacenamiento.");
-            }
-          } 
-        }
-      ]
-    );
+    Alert.alert("Eliminar", "¿Borrar permanentemente este archivo de la bóveda?", [
+      { text: "Cancelar", style: "cancel" },
+      { text: "Eliminar", style: "destructive", onPress: async () => {
+          try {
+            await FileSystem.deleteAsync(item.uri, { idempotent: true });
+            const filtrados = vaultData.items.filter(i => i.id !== item.id);
+            await guardarDatosEnMemoria({ items: filtrados });
+          } catch (error) {
+            Alert.alert("Error", "No se pudo borrar el archivo del almacenamiento.");
+          }
+      }}
+    ]);
   };
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#0b0e14" />
+      <StatusBar barStyle="light-content" backgroundColor="#050505" />
       
       {isAuthenticated ? (
         <VaultScreen 
@@ -199,46 +184,67 @@ export default function App() {
           onLogout={() => setIsAuthenticated(false)}
         />
       ) : (
-        <CalcScreen onAuth={() => setIsAuthenticated(true)} />
+        <CalcScreen onAuth={() => setIsAuthenticated(true)} secretPin={secretPin} />
       )}
 
-      {/* MODAL DE AJUSTES AVANZADOS */}
+      {/* MODAL CONFIGURACIÓN INICIAL DEL PIN */}
+      <Modal visible={isSetupModalVisible} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Configura tu PIN secreto</Text>
+            <Text style={styles.settingSubtext}>Este será el código que ingresarás en la calculadora para abrir la bóveda.</Text>
+            <TextInput 
+              style={styles.inputPin}
+              keyboardType="number-pad"
+              maxLength={8}
+              secureTextEntry
+              placeholder="Ej. 1234"
+              placeholderTextColor="#64748b"
+              value={newPinInput}
+              onChangeText={setNewPinInput}
+            />
+            <TouchableOpacity style={styles.primaryBtn} onPress={configurarNuevoPin}>
+              <Text style={styles.primaryBtnText}>Guardar PIN</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* MODAL AJUSTES DE LA BÓVEDA */}
       <Modal visible={isSettingsVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Seguridad Militar</Text>
+            <Text style={styles.modalTitle}>Ajustes de Seguridad</Text>
             
             <View style={styles.settingRow}>
               <View style={{ flex: 1, paddingRight: 10 }}>
                 <Text style={styles.settingText}>Anti-Screenshot</Text>
-                <Text style={styles.settingSubtext}>Bloquea capturas y grabaciones de pantalla dentro de la app.</Text>
+                <Text style={styles.settingSubtext}>Bloquea capturas de pantalla.</Text>
               </View>
-              <Switch 
-                value={antiScreenshot} 
-                onValueChange={setAntiScreenshot} 
-                trackColor={{ false: '#334155', true: '#4f46e5' }}
-                thumbColor="#ffffff"
-              />
+              <Switch value={antiScreenshot} onValueChange={setAntiScreenshot} trackColor={{ false: '#262626', true: '#ffffff' }} thumbColor="#a3a3a3"/>
             </View>
 
             <View style={styles.settingRow}>
               <View style={{ flex: 1, paddingRight: 10 }}>
                 <Text style={styles.settingText}>Sensor Panic Lock</Text>
-                <Text style={styles.settingSubtext}>Bloquea y cierra la bóveda de inmediato al voltear el teléfono boca abajo.</Text>
+                <Text style={styles.settingSubtext}>Bloquea al voltear el teléfono.</Text>
               </View>
-              <Switch 
-                value={faceDownLock} 
-                onValueChange={setFaceDownLock} 
-                trackColor={{ false: '#334155', true: '#4f46e5' }}
-                thumbColor="#ffffff"
-              />
+              <Switch value={faceDownLock} onValueChange={setFaceDownLock} trackColor={{ false: '#262626', true: '#ffffff' }} thumbColor="#a3a3a3"/>
             </View>
 
             <TouchableOpacity 
-              style={styles.closeBtn} 
-              onPress={() => setSettingsVisible(false)}
+              style={styles.secondaryBtn} 
+              onPress={() => {
+                setNewPinInput('');
+                setIsSetupModalVisible(true);
+                setSettingsVisible(false);
+              }}
             >
-              <Text style={styles.closeBtnText}>Guardar y Salir</Text>
+              <Text style={styles.secondaryBtnText}>Cambiar PIN Secreto</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.primaryBtn} onPress={() => setSettingsVisible(false)}>
+              <Text style={styles.primaryBtnText}>Cerrar Ajustes</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -247,21 +253,19 @@ export default function App() {
   );
 }
 
-// --- SUB-COMPONENTE: INTERFAZ CALCULADORA (CAMUFLAJE) ---
-function CalcScreen({ onAuth }) {
+// --- PANTALLA: CALCULADORA (CAMUFLAJE MEJORADO) ---
+function CalcScreen({ onAuth, secretPin }) {
   const [display, setDisplay] = useState('');
 
   const pressBotón = (val) => {
     if (val === 'C') {
       setDisplay('');
     } else if (val === '=') {
-      if (display === PIN_SECRETO) {
+      if (display === secretPin && secretPin !== null) {
         setDisplay('');
-        onAuth(); // Trigger de Autenticación
+        onAuth(); // Contraseña correcta, abrir bóveda
       } else {
-        // Se comporta como una calculadora normal si falla el código secreto
         try {
-          // Eval de seguridad básico para simulación operativa de matemática
           const resultado = eval(display.replace('×', '*').replace('÷', '/'));
           setDisplay(String(resultado));
         } catch {
@@ -283,9 +287,14 @@ function CalcScreen({ onAuth }) {
 
   return (
     <View style={styles.calcContainer}>
+      <View style={styles.calcHeader}>
+        <Text style={styles.calcHeaderText}>Calculadora</Text>
+      </View>
+      
       <View style={styles.displayContainer}>
         <Text style={styles.displayText} numberOfLines={1}>{display || '0'}</Text>
       </View>
+
       <View style={styles.keyboardContainer}>
         {botones.map((row, rIdx) => (
           <View key={rIdx} style={styles.calcRow}>
@@ -295,12 +304,16 @@ function CalcScreen({ onAuth }) {
                 key={bIdx} 
                 style={[
                   styles.calcButton, 
-                  b === '=' ? { backgroundColor: '#4f46e5' } : 
-                  ['÷','×','-','+','='].includes(b) ? { backgroundColor: '#1e293b' } : {}
+                  b === '=' ? { backgroundColor: '#e5e5e5' } : 
+                  ['÷','×','-','+','C'].includes(b) ? { backgroundColor: '#171717' } : {}
                 ]} 
                 onPress={() => pressBotón(b)}
               >
-                <Text style={styles.calcButtonText}>{b}</Text>
+                <Text style={[
+                  styles.calcButtonText,
+                  b === '=' ? { color: '#000000' } : 
+                  ['÷','×','-','+','C'].includes(b) ? { color: '#a3a3a3' } : {}
+                ]}>{b}</Text>
               </TouchableOpacity>
             ))}
           </View>
@@ -310,13 +323,12 @@ function CalcScreen({ onAuth }) {
   );
 }
 
-// --- SUB-COMPONENTE: INTERFAZ BÓVEDA PRIVADA ---
+// --- PANTALLA: BÓVEDA ---
 function VaultScreen({ vaultData, setSettingsVisible, onAddFile, onDeleteFile, onLogout }) {
   return (
     <View style={styles.vaultContainer}>
-      {/* Encabezado Premium */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Mi Bóveda</Text>
+        <Text style={styles.headerTitle}>Bóveda Secreta</Text>
         <View style={{ flexDirection: 'row' }}>
           <TouchableOpacity style={styles.iconButton} onPress={() => setSettingsVisible(true)}>
             <Text style={{ color: '#fff', fontSize: 18 }}>⚙️</Text>
@@ -327,11 +339,10 @@ function VaultScreen({ vaultData, setSettingsVisible, onAddFile, onDeleteFile, o
         </View>
       </View>
 
-      {/* Lista de archivos en rejilla */}
       {vaultData.items.length === 0 ? (
         <View style={styles.centerBox}>
-          <Text style={styles.emptyText}>Bóveda vacía de alta seguridad</Text>
-          <Text style={styles.emptySubtext}>Presiona el botón inferior para camuflar archivos</Text>
+          <Text style={styles.emptyText}>Sin archivos protegidos</Text>
+          <Text style={styles.emptySubtext}>Toca el botón [+] para encriptar fotos o videos</Text>
         </View>
       ) : (
         <FlatList 
@@ -341,20 +352,15 @@ function VaultScreen({ vaultData, setSettingsVisible, onAddFile, onDeleteFile, o
           contentContainerStyle={{ paddingHorizontal: 10, paddingTop: 10 }}
           renderItem={({ item }) => (
             <View style={styles.fileCard}>
-              {/* Des-enmascaramiento en tiempo real directo desde URI local */}
               <Image source={{ uri: item.uri }} style={styles.thumbnail} />
-              <TouchableOpacity 
-                style={styles.deleteBadge} 
-                onPress={() => onDeleteFile(item)}
-              >
-                <Text style={{ color: '#fff', fontSize: 10, fontWeight: 'bold' }}>X</Text>
+              <TouchableOpacity style={styles.deleteBadge} onPress={() => onDeleteFile(item)}>
+                <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>✕</Text>
               </TouchableOpacity>
             </View>
           )}
         />
       )}
 
-      {/* Botón flotante de acción rápida */}
       <TouchableOpacity style={styles.fab} onPress={onAddFile}>
         <Text style={styles.fabText}>+</Text>
       </TouchableOpacity>
@@ -362,41 +368,46 @@ function VaultScreen({ vaultData, setSettingsVisible, onAddFile, onDeleteFile, o
   );
 }
 
-// --- ESTILOS VISUALES MODERNOS Y MINIMALISTAS ---
+// --- ESTILO MINIMALISTA Y LIMPIO ---
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0b0e14' },
+  container: { flex: 1, backgroundColor: '#050505' }, // Negro puro profundo
   
-  // Estilos Calculadora
-  calcContainer: { flex: 1, justifyContent: 'flex-end', backgroundColor: '#0b0e14', paddingBottom: 20 },
-  displayContainer: { paddingHorizontal: 30, paddingVertical: 20, alignItems: 'flex-end' },
-  displayText: { color: '#60a5fa', fontSize: 50, fontFamily: 'System', fontWeight: '300' },
-  keyboardContainer: { paddingHorizontal: 10 },
-  calcRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
-  calcButton: { width: width/4 - 15, height: width/4 - 15, borderRadius: 50, backgroundColor: '#111827', justifyContent: 'center', alignItems: 'center' },
-  calcButtonEmpty: { width: width/4 - 15, height: width/4 - 15 },
-  calcButtonText: { color: '#f3f4f6', fontSize: 24, fontWeight: '400' },
+  // Calculadora
+  calcContainer: { flex: 1, backgroundColor: '#050505' },
+  calcHeader: { paddingTop: 60, paddingHorizontal: 25, alignItems: 'center' },
+  calcHeaderText: { color: '#404040', fontSize: 18, fontWeight: '500', letterSpacing: 1 },
+  displayContainer: { flex: 1, justifyContent: 'flex-end', paddingHorizontal: 30, paddingBottom: 30 },
+  displayText: { color: '#ffffff', fontSize: 70, fontWeight: '200', textAlign: 'right' },
+  keyboardContainer: { paddingHorizontal: 15, paddingBottom: 40 },
+  calcRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 },
+  calcButton: { width: width/4 - 20, height: width/4 - 20, borderRadius: Math.round(width/4), backgroundColor: '#0a0a0a', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#171717' },
+  calcButtonEmpty: { width: width/4 - 20, height: width/4 - 20 },
+  calcButtonText: { color: '#ffffff', fontSize: 28, fontWeight: '300' },
 
-  // Estilos Bóveda
-  vaultContainer: { flex: 1, backgroundColor: '#0b0e14' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 50, paddingBottom: 20, borderBottomWidth: 1, borderBottomColor: '#1e293b' },
-  headerTitle: { fontSize: 24, fontWeight: 'bold', color: '#ffffff' },
-  iconButton: { width: 40, height: 40, borderRadius: 10, backgroundColor: '#1c2331', justifyContent: 'center', alignItems: 'center' },
+  // Bóveda
+  vaultContainer: { flex: 1, backgroundColor: '#050505' },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 60, paddingBottom: 20, borderBottomWidth: 1, borderBottomColor: '#171717' },
+  headerTitle: { fontSize: 22, fontWeight: '600', color: '#ffffff', letterSpacing: 0.5 },
+  iconButton: { width: 45, height: 45, borderRadius: 12, backgroundColor: '#0a0a0a', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#171717' },
   centerBox: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
-  emptyText: { color: '#ffffff', fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
-  emptySubtext: { color: '#64748b', fontSize: 13, textAlign: 'center', marginTop: 8 },
-  fileCard: { width: COLUMN_SIZE, height: COLUMN_SIZE, margin: 5, borderRadius: 12, backgroundColor: '#1c2331', overflow: 'hidden', position: 'relative' },
+  emptyText: { color: '#a3a3a3', fontSize: 16, fontWeight: '500', textAlign: 'center' },
+  emptySubtext: { color: '#525252', fontSize: 14, textAlign: 'center', marginTop: 10 },
+  fileCard: { width: COLUMN_SIZE, height: COLUMN_SIZE, margin: 5, borderRadius: 8, backgroundColor: '#171717', overflow: 'hidden' },
   thumbnail: { width: '100%', height: '100%', resizeMode: 'cover' },
-  deleteBadge: { position: 'absolute', top: 5, right: 5, backgroundColor: 'rgba(239, 68, 68, 0.8)', width: 20, height: 20, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
-  fab: { position: 'absolute', bottom: 30, right: 30, width: 56, height: 56, borderRadius: 28, backgroundColor: '#4f46e5', justifyContent: 'center', alignItems: 'center', elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3 },
-  fabText: { color: '#fff', fontSize: 28, fontWeight: '300' },
+  deleteBadge: { position: 'absolute', top: 5, right: 5, backgroundColor: 'rgba(0,0,0,0.6)', width: 24, height: 24, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+  fab: { position: 'absolute', bottom: 40, right: 30, width: 60, height: 60, borderRadius: 30, backgroundColor: '#ffffff', justifyContent: 'center', alignItems: 'center', elevation: 5 },
+  fabText: { color: '#000000', fontSize: 32, fontWeight: '300', marginTop: -4 },
 
-  // Estilos Modales Ajustes
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', alignItems: 'center' },
-  modalContent: { width: '85%', backgroundColor: '#111827', padding: 25, borderRadius: 20, borderWidth: 1, borderBottomColor: '#1e293b' },
-  modalTitle: { fontSize: 20, color: '#fff', fontWeight: 'bold', marginBottom: 20 },
-  settingRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: '#1e293b' },
-  settingText: { color: '#ffffff', fontSize: 15, fontWeight: '600' },
-  settingSubtext: { color: '#64748b', fontSize: 11, marginTop: 2 },
-  closeBtn: { marginTop: 25, backgroundColor: '#4f46e5', padding: 12, borderRadius: 10, alignItems: 'center' },
-  closeBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 14 }
+  // Modales
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', alignItems: 'center' },
+  modalContent: { width: '85%', backgroundColor: '#0a0a0a', padding: 25, borderRadius: 16, borderWidth: 1, borderColor: '#262626' },
+  modalTitle: { fontSize: 20, color: '#ffffff', fontWeight: '600', marginBottom: 15 },
+  settingRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: '#171717' },
+  settingText: { color: '#ffffff', fontSize: 15, fontWeight: '500' },
+  settingSubtext: { color: '#737373', fontSize: 12, marginTop: 4 },
+  inputPin: { backgroundColor: '#171717', color: '#ffffff', fontSize: 20, padding: 15, borderRadius: 10, textAlign: 'center', marginVertical: 20, borderWidth: 1, borderColor: '#262626' },
+  primaryBtn: { marginTop: 15, backgroundColor: '#ffffff', padding: 15, borderRadius: 10, alignItems: 'center' },
+  primaryBtnText: { color: '#000000', fontWeight: '600', fontSize: 15 },
+  secondaryBtn: { marginTop: 25, backgroundColor: '#171717', padding: 15, borderRadius: 10, alignItems: 'center', borderWidth: 1, borderColor: '#262626' },
+  secondaryBtnText: { color: '#ffffff', fontWeight: '500', fontSize: 15 }
 });
