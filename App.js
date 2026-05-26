@@ -5,7 +5,8 @@ import {
 } from 'react-native';
 import { Accelerometer } from 'expo-sensors';
 import * as ScreenCapture from 'expo-screen-capture';
-import * as FileSystem from 'expo-file-system';
+// SOLUCIÓN 1: Usar la API legacy de FileSystem que Expo 54 pide
+import * as FileSystem from 'expo-file-system/legacy'; 
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -22,12 +23,13 @@ export default function App() {
   const [isSettingsVisible, setSettingsVisible] = useState(false);
   const [vaultData, setVaultData] = useState({ items: [] });
   
-  // Nuevo estado para el PIN
   const [secretPin, setSecretPin] = useState(null);
   const [isSetupModalVisible, setIsSetupModalVisible] = useState(false);
   const [newPinInput, setNewPinInput] = useState('');
 
-  // 1. CARGA INICIAL
+  // SOLUCIÓN 2: Bandera para saber si estamos abriendo la galería a propósito
+  const isPickingMedia = useRef(false);
+
   useEffect(() => {
     const inicializarApp = async () => {
       try {
@@ -35,7 +37,7 @@ export default function App() {
         if (pinGuardado) {
           setSecretPin(pinGuardado);
         } else {
-          setIsSetupModalVisible(true); // Mostrar modal de configuración inicial
+          setIsSetupModalVisible(true);
         }
 
         const savedData = await AsyncStorage.getItem('@vault_db');
@@ -53,11 +55,11 @@ export default function App() {
     inicializarApp();
   }, []);
 
-  // 2. SEGURIDAD: BLOQUEO AL MINIMIZAR LA APP
+  // SEGURIDAD: BLOQUEO AL MINIMIZAR LA APP
   useEffect(() => {
     const subscription = AppState.addEventListener('change', nextAppState => {
-      // Si la app pasa a segundo plano o se inactiva, bloqueamos inmediatamente
-      if (nextAppState.match(/inactive|background/)) {
+      // Solo bloqueamos si va a segundo plano Y NO estamos eligiendo una foto
+      if (nextAppState.match(/inactive|background/) && !isPickingMedia.current) {
         setIsAuthenticated(false);
         setSettingsVisible(false);
       }
@@ -82,7 +84,6 @@ export default function App() {
     Alert.alert("Éxito", "PIN configurado. Úsalo en la calculadora y presiona '=' para entrar.");
   };
 
-  // SEGURIDAD: Sensores
   useEffect(() => {
     if (antiScreenshot) ScreenCapture.preventScreenCaptureAsync();
     else ScreenCapture.allowScreenCaptureAsync();
@@ -101,7 +102,6 @@ export default function App() {
     return () => subscription && subscription.remove();
   }, [faceDownLock]);
 
-  // OCULTAR ARCHIVO (Con validación estricta de carpeta)
   const ocultarNuevoArchivo = async () => {
     const pickerPermission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     const libraryPermission = await MediaLibrary.requestPermissionsAsync();
@@ -111,11 +111,17 @@ export default function App() {
       return;
     }
 
+    // Le decimos a la app que vamos a abrir la galería, que NO cierre la bóveda
+    isPickingMedia.current = true;
+
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.All,
       allowsEditing: false,
       quality: 1,
     });
+
+    // Ya regresamos de la galería, reactivamos la seguridad
+    isPickingMedia.current = false;
 
     if (!result.canceled && result.assets && result.assets.length > 0) {
       const assetOriginal = result.assets[0];
@@ -123,26 +129,22 @@ export default function App() {
       const destinoOculto = `${VAULT_DIR}${nuevoNombre}`;
 
       try {
-        // FORZAR COMPROBACIÓN DE CARPETA JUSTO ANTES DE MOVER (Solución al error)
         const folderInfo = await FileSystem.getInfoAsync(VAULT_DIR);
         if (!folderInfo.exists) {
           await FileSystem.makeDirectoryAsync(VAULT_DIR, { intermediates: true });
         }
         await FileSystem.writeAsStringAsync(`${VAULT_DIR}.nomedia`, '');
 
-        // Copiar archivo
         await FileSystem.copyAsync({
           from: assetOriginal.uri,
           to: destinoOculto,
         });
 
-        // Guardar en DB local
         const nuevosItems = [...vaultData.items, { 
           id: nuevoNombre, name: assetOriginal.uri.split('/').pop(), uri: destinoOculto 
         }];
         await guardarDatosEnMemoria({ items: nuevosItems });
 
-        // Borrar original
         if (assetOriginal.assetId) {
           try {
             await MediaLibrary.deleteAssetsAsync([assetOriginal.assetId]);
@@ -187,7 +189,6 @@ export default function App() {
         <CalcScreen onAuth={() => setIsAuthenticated(true)} secretPin={secretPin} />
       )}
 
-      {/* MODAL CONFIGURACIÓN INICIAL DEL PIN */}
       <Modal visible={isSetupModalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -210,7 +211,6 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* MODAL AJUSTES DE LA BÓVEDA */}
       <Modal visible={isSettingsVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -253,7 +253,6 @@ export default function App() {
   );
 }
 
-// --- PANTALLA: CALCULADORA (CAMUFLAJE MEJORADO) ---
 function CalcScreen({ onAuth, secretPin }) {
   const [display, setDisplay] = useState('');
 
@@ -263,7 +262,7 @@ function CalcScreen({ onAuth, secretPin }) {
     } else if (val === '=') {
       if (display === secretPin && secretPin !== null) {
         setDisplay('');
-        onAuth(); // Contraseña correcta, abrir bóveda
+        onAuth();
       } else {
         try {
           const resultado = eval(display.replace('×', '*').replace('÷', '/'));
@@ -323,7 +322,6 @@ function CalcScreen({ onAuth, secretPin }) {
   );
 }
 
-// --- PANTALLA: BÓVEDA ---
 function VaultScreen({ vaultData, setSettingsVisible, onAddFile, onDeleteFile, onLogout }) {
   return (
     <View style={styles.vaultContainer}>
@@ -368,11 +366,8 @@ function VaultScreen({ vaultData, setSettingsVisible, onAddFile, onDeleteFile, o
   );
 }
 
-// --- ESTILO MINIMALISTA Y LIMPIO ---
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#050505' }, // Negro puro profundo
-  
-  // Calculadora
+  container: { flex: 1, backgroundColor: '#050505' },
   calcContainer: { flex: 1, backgroundColor: '#050505' },
   calcHeader: { paddingTop: 60, paddingHorizontal: 25, alignItems: 'center' },
   calcHeaderText: { color: '#404040', fontSize: 18, fontWeight: '500', letterSpacing: 1 },
@@ -383,8 +378,6 @@ const styles = StyleSheet.create({
   calcButton: { width: width/4 - 20, height: width/4 - 20, borderRadius: Math.round(width/4), backgroundColor: '#0a0a0a', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#171717' },
   calcButtonEmpty: { width: width/4 - 20, height: width/4 - 20 },
   calcButtonText: { color: '#ffffff', fontSize: 28, fontWeight: '300' },
-
-  // Bóveda
   vaultContainer: { flex: 1, backgroundColor: '#050505' },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 60, paddingBottom: 20, borderBottomWidth: 1, borderBottomColor: '#171717' },
   headerTitle: { fontSize: 22, fontWeight: '600', color: '#ffffff', letterSpacing: 0.5 },
@@ -397,8 +390,6 @@ const styles = StyleSheet.create({
   deleteBadge: { position: 'absolute', top: 5, right: 5, backgroundColor: 'rgba(0,0,0,0.6)', width: 24, height: 24, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
   fab: { position: 'absolute', bottom: 40, right: 30, width: 60, height: 60, borderRadius: 30, backgroundColor: '#ffffff', justifyContent: 'center', alignItems: 'center', elevation: 5 },
   fabText: { color: '#000000', fontSize: 32, fontWeight: '300', marginTop: -4 },
-
-  // Modales
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', alignItems: 'center' },
   modalContent: { width: '85%', backgroundColor: '#0a0a0a', padding: 25, borderRadius: 16, borderWidth: 1, borderColor: '#262626' },
   modalTitle: { fontSize: 20, color: '#ffffff', fontWeight: '600', marginBottom: 15 },
